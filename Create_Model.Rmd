@@ -1,0 +1,268 @@
+---
+title: "Create Correction Model"
+author: "Siyan Pu"
+date: '2022-06-20'
+output: html_document
+---
+
+I. Import Packages: If the package has not been installed, run install.packages('package_name') in the console to install it.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(ggpubr)
+```
+
+II\. Prepare Data:
+
+Reformat Airly data to this format: Date-Particle's Type-Sensor ID. There are different functions that can help you do this in R such as 'gather' function. Search for functions and packages that work for your data.
+
+![](images/Screen%20Shot%202022-06-20%20at%2012.39.45%20PM.png)
+
+Reformat regulatory data to this format: Time-Date-Particle's Type
+
+![](images/Screen%20Shot%202022-06-21%20at%204.31.42%20PM.png)
+
+III\. Import & Prepare Data: make sure the data file is in the same folder with this markdown file.
+
+a). Prepare airly data
+
+Airly data is in CET time zone while regulatory data is in EST time zone. One important step is to convert the time variable in airly data to EST time zone so that two sources of data can be aligned.
+
+```{r}
+airly1 <- read.csv("airly1.csv")
+#Use function in lubridate package to convert to another time zone
+airly1$time <- as.POSIXct(airly1$date, format="%Y-%m-%d %H:%M:%S", tz="CET")
+airly1$time <- lubridate::with_tz(airly1$time, "EST")
+#Extract day, hour, and dayhour variables
+airly1$day <- date(strptime(airly1$time, format="%Y-%m-%d %H:%M:%S"))
+airly1$hour <- hour(strptime(airly1$time, format="%Y-%m-%d %H:%M:%S"))
+airly1$dayhour <- lubridate::ymd_h(format(as.POSIXct(airly1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+airly1$sensor_id <- as.factor(airly1$sensor_id)
+#Take PM2.5 as an example
+#Select relevant variables and filter the time period you'd like to create the models
+airly1pm25 <- airly1 %>%
+  select(time, dayhour, day, hour, pm25, sensor_id) %>%
+  filter(day >= '2021-09-06' & day <= '2021-09-16')
+```
+
+b) Prepare regulatory data
+
+```{r}
+regular1 <- read.csv("regular1.csv")
+#Convert non-numeric variables to numeric types
+regular1$RH <- as.numeric(regular1$RH)
+regular1$Pressure <- as.numeric(regular1$Pressure)
+#Same process to get time variables for regulatory data
+regular1$day <- date(strptime(regular1$Date, format="%Y-%m-%d"))
+regular1$hour <- hour(strptime(regular1$Time, format="%H:%M"))
+regular1$time <- as.POSIXct(paste(regular1$day, regular1$Time), format="%Y-%m-%d %H:%M")
+regular1$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+#select the same time period as airly
+regular1 <- regular1 %>%
+  filter(day >= '2021-09-06' & day <= '2021-09-16')
+```
+
+c) Calculate daily and hourly averages of regulatory PM2.5 data
+
+```{r}
+regular_pm25d <- regular1 %>%
+  group_by(day) %>%
+  summarise(rdailyPM25 = mean(PM25, na.rm = T))
+regular_pm25h <- regular1 %>%
+  group_by(dayhour) %>%
+  summarise(rhourlyPM25 = mean(PM25, na.rm = T))
+```
+
+d) Data exploration in plots
+
+```{r}
+temp1 <- airly1pm25 %>%
+  group_by(day, sensor_id) %>%
+  summarise(dailyPM25 = mean(pm25, na.rm = T)) %>%
+  na.omit()
+
+temp2 <- regular_pm25d
+temp2$sensor_id <- 'FRM'
+
+ggplot(data = temp1, aes(x=day, y=dailyPM25)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = temp2, aes(x=day, y=rdailyPM25, lty="FRM/FEM"), color="black") +
+  xlab("Date") +ylab(expression(paste("Daily P", M[2.5], " [",mu,"g ",m^-3,"]"))) + ggtitle('Before Correction')
+```
+
+```{r}
+temp1 <- airly1pm25 %>%
+  group_by(dayhour, sensor_id) %>%
+  summarise(hourlyPM25 = mean(pm25, na.rm = T)) %>%
+  na.omit()
+
+temp2 <- regular_pm25h
+temp2$sensor_id <- 'FRM'
+
+ggplot(data = temp1 , aes(x=dayhour, y=hourlyPM25)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = temp2, aes(x=dayhour, y=rhourlyPM25, lty="FRM/FEM"), color="black") +
+  xlab("Hour") +ylab(expression(paste("Hourly P", M[2.5], " [",mu,"g ",m^-3,"]"))) + ggtitle('Before Correction')
+```
+
+IV\. Establish Models: this tutorial uses sensor 7160 and 7205 as example
+
+create the correction model for daily PM2.5 data from 7160
+
+```{r}
+temp1 <- airly1pm25 %>%
+  filter(sensor_id == '7160') %>%
+  group_by(day) %>%
+  summarise(adailyPM25 = mean(pm25, na.rm = T))
+
+#plot airly regulatory data by day
+merge(temp1, regular_pm25d, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM25, colour="Airly"))+
+  geom_line(aes(y=rdailyPM25, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[2.5], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7160')
+
+PM25_7160d <- merge(temp1, regular_pm25d, by = "day")
+
+#create simple linear regression model with regulatory data as the independent variable and airly data as the dependent variable
+model7160dpm25 <- lm(adailyPM25 ~ rdailyPM25 + 1, data = PM25_7160d)
+
+#print result
+summary(model7160dpm25)
+
+#use the model coefficients to correct the airly data
+PM25_7160d <- PM25_7160d %>%
+  mutate(corrected_PM25 = (adailyPM25 - coef(model7160dpm25)[1][1]) / coef(model7160dpm25)[2][1])
+```
+
+create the correction model for hourly PM2.5 data from 7160
+
+```{r}
+temp1 <- airly1pm25 %>%
+  filter(sensor_id == '7160') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM25 = mean(pm25, na.rm = T))
+
+merge(temp1, regular_pm25h, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM25, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM25, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[2.5], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7160')
+
+PM25_7160h <- merge(temp1, regular_pm25h, by = "dayhour")
+model7160hpm25 <- lm(ahourlyPM25 ~ rhourlyPM25 + 1, data = PM25_7160h)
+summary(model7160hpm25)
+PM25_7160h <- PM25_7160h %>%
+  mutate(corrected_PM25 = (ahourlyPM25 - coef(model7160hpm25)[1][1]) / coef(model7160hpm25)[2][1])
+```
+
+create the correction model for daily PM2.5 data from 7205
+
+```{r}
+temp1 <- airly1pm25 %>%
+  filter(sensor_id == '7205') %>%
+  group_by(day) %>%
+  summarise(adailyPM25 = mean(pm25, na.rm = T))
+
+merge(temp1, regular_pm25d, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM25, colour="Airly"))+
+  geom_line(aes(y=rdailyPM25, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[2.5], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7205')
+
+PM25_7205d <- merge(temp1, regular_pm25d, by = "day")
+model7205dpm25 <- lm(adailyPM25 ~ rdailyPM25 + 1, data = PM25_7205d)
+summary(model7205dpm25)
+PM25_7205d <- PM25_7205d %>%
+  mutate(corrected_PM25 = (adailyPM25 - coef(model7205dpm25)[1][1]) / coef(model7205dpm25)[2][1])
+```
+
+create the correction model for hourly PM2.5 data from 7205
+
+```{r}
+temp1 <- airly1pm25 %>%
+  filter(sensor_id == '7205') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM25 = mean(pm25, na.rm = T))
+
+merge(temp1, regular_pm25h, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM25, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM25, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[2.5], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7205')
+
+PM25_7205h <- merge(temp1, regular_pm25h, by = "dayhour")
+model7205hpm25 <- lm(ahourlyPM25 ~ rhourlyPM25 + 1, data = PM25_7205h)
+summary(model7205hpm25)
+PM25_7205h <- PM25_7205h %>%
+  mutate(corrected_PM25 = (ahourlyPM25 - coef(model7205hpm25)[1][1]) / coef(model7205hpm25)[2][1])
+```
+
+V. save hourly and daily regression models to use in another R session
+
+```{r}
+save(model7160hpm25, model7205hpm25, file = "hourlypm25.RData")
+save(model7160dpm25, model7205dpm25, file = "dailypm25.RData")
+```
+
+VI\. Plot corrected data
+
+Plot corrected daily data
+
+```{r}
+PM25_7160d$sensor_id <- '7160'
+PM25_7205d$sensor_id <- '7205'
+
+correct_vis <- rbind(PM25_7160d, PM25_7205d)%>%
+  select(day, corrected_PM25, sensor_id)
+regularPM25day <- PM25_7160d %>% select(day, rdailyPM25)
+regularPM25day$sensor_id <- 'FRM/FEM'
+
+ggplot(data = correct_vis, aes(x=day, y=corrected_PM25)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = regularPM25day, aes(x=day, y=rdailyPM25, lty="FRM/FEM"), color="black") +
+  xlab("Date") +ylab("") + ggtitle(expression(paste("Daily P", M[2.5], " [",mu,"g ",m^-3,"]", ' After Correction')))
+```
+
+Plot corrected hourly data
+
+```{r}
+PM25_7160h$sensor_id <- '7160'
+PM25_7205h$sensor_id <- '7205'
+
+correct_vis <- rbind(PM25_7160h, PM25_7205h)%>%
+  select(dayhour, corrected_PM25, sensor_id)
+regularPM25h <- PM25_7160h %>% select(dayhour, rhourlyPM25)
+regularPM25h$sensor_id <- 'FRM/FEM'
+
+ggplot(data = correct_vis, aes(x=dayhour, y=corrected_PM25)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = regularPM25h, aes(x=dayhour, y=rhourlyPM25, lty="FRM/FEM"), color="black") +
+  xlab("Hour") +ylab("") + ggtitle(expression(paste("Hourly P", M[2.5], " [",mu,"g ",m^-3,"]", ' After Correction')))
+```
+
+VII\. Plot regressions
+
+```{r}
+r1 <- ggplot(model7160dpm25, aes(x = rdailyPM25, y = adailyPM25)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 45, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 40, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[2.5], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[2.5], " [",mu,"g ",m^-3,"]")))
+
+r2 <- ggplot(model7205dpm25, aes(x = rdailyPM25, y = adailyPM25)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 45, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 40, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[2.5], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[2.5], " [",mu,"g ",m^-3,"]")))
+
+ggarrange(r1, r2,
+          labels = c("Airly 7160", "Airly 7205"), hjust = 0.005,
+          ncol = 2, nrow = 1)
+```
