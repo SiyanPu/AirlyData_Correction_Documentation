@@ -51,7 +51,7 @@ airly1pm25 <- airly1 %>%
   filter(day >= '2021-09-06' & day <= '2021-09-16')
 ```
 
-b) Prepare regulatory data
+b)  Prepare regulatory data
 
 ```{r}
 regular1 <- read.csv("regular1.csv")
@@ -71,7 +71,7 @@ regular1 <- regular1 %>%
   filter(day >= '2021-09-06' & day <= '2021-09-16')
 ```
 
-c) Calculate daily and hourly averages of regulatory data.
+c)  Calculate daily and hourly averages of regulatory data.
 
 If you only want to create simple linear regression models for particle like PM2.5 that doesn't need unit transformation:
 
@@ -84,7 +84,7 @@ regular_pm25h <- regular1 %>%
   summarise(rhourlyPM25 = mean(PM25, na.rm = T))
 ```
 
-d) Data exploration in plots: PM2.5 as example
+d)  Data exploration in plots: PM2.5 as example
 
 ```{r}
 #calcuate daily average pm2.5 for each sensor

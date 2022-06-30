@@ -1,0 +1,33 @@
+---
+title: "regular_data_preprocess"
+author: "Siyan Pu"
+date: "4/11/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+all regular data preprocessing
+```{r}
+regular1 <- read.csv("regular1.csv")
+regular1$RH <- as.numeric(regular1$RH)
+regular1$Pressure <- as.numeric(regular1$Pressure)
+regular1$day <- date(strptime(regular1$Date, format="%Y-%m-%d"))
+regular1$hour <- hour(strptime(regular1$Time, format="%H:%M"))
+regular1$time <- as.POSIXct(paste(regular1$day, regular1$Time), format="%Y-%m-%d %H:%M")
+regular1$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+```
+
+```{r}
+regular2 <- rbind(read.csv("regular_min_1020.csv"), read.csv("regular_min_1109.csv"))
+regular2$PM25 <- as.numeric(regular2$PM25)
+regular2$PM10 <- as.numeric(regular2$PM10)
+regular2$day <- date(strptime(regular2$Date, format="%Y-%m-%d"))
+regular2$hour <- hour(strptime(regular2$Time, format="%H:%M"))
+regular2$time <- as.POSIXct(paste(regular2$day, regular2$Time), format="%Y-%m-%d %H:%M")
+regular2$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular2$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+regular2 <- regular2 %>%
+  filter(day >= '2021-09-06' & day <= '2021-11-07')
+```

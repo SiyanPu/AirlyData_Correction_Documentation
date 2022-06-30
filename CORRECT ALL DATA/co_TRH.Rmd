@@ -1,0 +1,170 @@
+---
+title: "co_TRH"
+author: "Siyan Pu"
+date: "12/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(ggpubr)
+```
+
+airly all CO data preprocessing
+```{r}
+airly_cob <- read.csv("airly_co.csv", check.names = F)
+airly_cob <- airly_cob %>%
+  gather(sensor_id, CO, -c('Time')) %>%
+  rename('date' = 'Time')
+airly_cob <- airly_cob[,c(1,3,2)] 
+airly_cob$sensor_id <- as.integer(airly_cob$sensor_id)
+
+airly_coc <- read.csv("airly_co_nov.csv", check.names = F)
+airly_coc <- airly_coc %>%
+  gather(sensor_id, CO, -c('Time', 'mark')) %>%
+  rename('date' = 'Time')
+airly_coc$sensor_id <- as.integer(airly_coc$sensor_id)
+
+airly_cod <- airly_coc %>%
+  filter(date >= '2021-10-31 2:00:00' & mark == 1)
+airly_coc <- airly_coc %>%
+  filter(date <= '2021-10-31 2:55:00' & is.na(mark))
+
+airly_coc <- airly_coc %>%
+  select(-mark)
+airly_coc <- airly_coc[,c(1,3,2)]
+
+airly_cod <- airly_cod %>%
+  select(-mark)
+airly_cod <- airly_cod[,c(1,3,2)]
+```
+
+```{r}
+airly_coa <- read.csv("airly2.csv") %>%
+  select(date, CO, sensor_id)
+airly2 <- rbind(airly_coa, airly_cob, airly_coc)
+
+#convert to EST time zone (before daylight saving, 7 hour difference)
+airly2$time <- as.POSIXct(airly2$date, format="%Y-%m-%d %H:%M:%S", tz="EET")
+airly2$time <- lubridate::with_tz(airly2$time, "America/New_York")
+
+#convert to EST time zone (after daylight saving, 6 hour difference)
+airly_cod$time <- as.POSIXct(airly_cod$date, format="%Y-%m-%d %H:%M:%S", tz="CET")
+airly_cod$time <- lubridate::with_tz(airly_cod$time, "America/New_York")
+
+airly2 <- rbind(airly2, airly_cod)
+#airly2$CO <- airly2$CO/1000
+airly2$day <- date(strptime(airly2$time, format="%Y-%m-%d %H:%M:%S"))
+airly2$hour <- hour(strptime(airly2$time, format="%Y-%m-%d %H:%M:%S"))
+airly2$dayhour <- lubridate::ymd_h(format(as.POSIXct(airly2$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+airly2$sensor_id <- as.factor(airly2$sensor_id)
+```
+
+```{r}
+airly_co <- airly2 %>%
+  select(time, CO, day, dayhour, sensor_id)
+
+airly_co <- airly_co %>%
+  filter(!is.na(CO))
+
+airly_co$CO[airly_co$CO < 0] <- 0
+```
+
+```{r}
+regular1 <- read.csv("regular1.csv") %>%
+  select(-Pressure)
+regular1$RH <- as.numeric(regular1$RH)
+regular1$day <- date(strptime(regular1$Date, format="%Y-%m-%d"))
+regular1$hour <- hour(strptime(regular1$Time, format="%H:%M"))
+regular1$time <- as.POSIXct(paste(regular1$day, regular1$Time), format="%Y-%m-%d %H:%M")
+regular1$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+```
+
+```{r}
+regular2 <- rbind(read.csv("regular_min_1020.csv"), read.csv("regular_min_1109.csv"))
+regular2$CO <- as.numeric(regular2$CO)
+regular2$RH <- as.numeric(regular2$RH)
+regular2$day <- date(strptime(regular2$Date, format="%Y-%m-%d"))
+regular2$hour <- hour(strptime(regular2$Time, format="%H:%M"))
+regular2$time <- as.POSIXct(paste(regular2$day, regular2$Time), format="%Y-%m-%d %H:%M")
+regular2$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular2$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+```
+
+Processing with TRH
+```{r}
+regular_coa <- regular1 %>%
+  select(time, CO, day, dayhour, Temp, RH)
+
+regular_cob <- regular2 %>%
+  select(time, CO, day, dayhour, Temp, RH)
+
+regular_co <- rbind(regular_coa, regular_cob)
+
+regular_co$CO[regular_co$CO == ' C '] <- NA
+regular_co$CO <- as.numeric(regular_co$CO, na.rm = T)
+regular_co$CO[regular_co$CO < 0] <- 0
+
+temp2 <- regular_co %>%
+  group_by(day) %>%
+  summarise(rdailyCO = mean(CO, na.rm = T), rTemp = mean(Temp, na.rm = T), rRH = mean(RH, na.rm = T))
+```
+
+7160 daily model
+```{r}
+temp1 <- airly_co %>%
+  filter(sensor_id == '7160') %>%
+  group_by(day) %>%
+  summarise(adailyCO = mean(CO, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyCO, colour="airly"))+
+  geom_line(aes(y=rdailyCO, colour="regular"))
+
+CO_day <- merge(temp1, temp2, by = "day")
+cor(CO_day$adailyCO, CO_day$rdailyCO)
+model1 <- lm(adailyCO ~ rdailyCO + rTemp + rRH + 1, data = CO_day)
+summary(model1)
+```
+
+7205 daily model
+```{r}
+temp1 <- airly_co %>%
+  filter(sensor_id == '7205' & !is.na(CO)) %>%
+  group_by(day) %>%
+  summarise(adailyCO = mean(CO, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyCO, colour="airly"))+
+  geom_line(aes(y=rdailyCO, colour="regular"))
+
+CO_day <- merge(temp1, temp2, by = "day")
+cor(CO_day$adailyCO, CO_day$rdailyCO)
+model2 <- lm(adailyCO ~ rdailyCO + rTemp + rRH + 1, data = CO_day)
+summary(model2)
+```
+
+7250 daily model
+```{r}
+temp1 <- airly_co %>%
+  filter(sensor_id == '7250') %>%
+  group_by(day) %>%
+  summarise(adailyCO = mean(CO, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyCO, colour="airly"))+
+  geom_line(aes(y=rdailyCO, colour="regular"))
+
+CO_day <- merge(temp1, temp2, by = "day")
+cor(CO_day$adailyCO, CO_day$rdailyCO)
+model3 <- lm(adailyCO ~ rdailyCO + rTemp + rRH + 1, data = CO_day)
+summary(model3)
+```

@@ -1,0 +1,754 @@
+---
+title: "pm10"
+author: "Siyan Pu"
+date: "11/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(tidyr)
+library(ggpubr)
+```
+
+all airly data preprocessing
+```{r}
+airly_pm10b <- read.csv("airly_pm10.csv", check.names = F)
+airly_pm10b <- airly_pm10b %>%
+  gather(sensor_id, pm10, -c('Time')) %>%
+  rename('date' = 'Time')
+airly_pm10b <- airly_pm10b[,c(1,3,2)]
+airly_pm10b$sensor_id <- as.integer(airly_pm10b$sensor_id)
+
+airly_pm10c <- read.csv("airly_pm10_nov.csv", check.names = F)
+airly_pm10c <- airly_pm10c %>%
+  gather(sensor_id, pm10, -c('Time', 'mark')) %>%
+  rename('date' = 'Time')
+airly_pm10c$sensor_id <- as.integer(airly_pm10c$sensor_id) 
+
+airly_pm10c <- airly_pm10c %>%
+  select(-mark)
+airly_pm10c <- airly_pm10c[,c(1,3,2)]
+```
+
+```{r}
+airly1_pm10a <- read.csv("airly1.csv") %>%
+  select(date, pm10, sensor_id)
+airly1 <- rbind(airly1_pm10a, airly_pm10b, airly_pm10c)
+#convert to EST time zone (before daylight saving, 7 hour difference)
+#convert to EST time zone (after daylight saving, 6 hour difference)
+airly1$time <- as.POSIXct(airly1$date, format="%Y-%m-%d %H:%M:%S", tz="CET")
+airly1$time <- lubridate::with_tz(airly1$time, "EST")
+airly1$day <- date(strptime(airly1$time, format="%Y-%m-%d %H:%M:%S"))
+airly1$hour <- hour(strptime(airly1$time, format="%Y-%m-%d %H:%M:%S"))
+airly1$dayhour <- lubridate::ymd_h(format(as.POSIXct(airly1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+airly1$sensor_id <- as.factor(airly1$sensor_id)
+airly1pm10 <- airly1 %>%
+  filter(day >= '2021-09-06' & day <= '2021-11-07')
+```
+
+
+Precision for PM10
+```{r}
+temp1 <- airly1 %>%
+  group_by(day) %>%
+  summarise(dailyPM10_all = mean(pm10, na.rm = T))
+
+temp2 <- airly1 %>%
+  group_by(day, sensor_id) %>%
+  summarise(dailyPM10 = mean(pm10, na.rm = T))
+
+PM10 <- merge(temp1, temp2, by = "day", all.x = T) %>%
+  mutate(diff_square = (dailyPM10_all-dailyPM10)**2)
+
+M <- n_distinct(PM10$sensor_id)
+N <- n_distinct(PM10$day)
+
+SD <- sqrt(sum(PM10$diff_square) / (M*N-1))
+SD/mean(airly1$pm10, na.rm=T)*100
+```
+
+sensor to sensor comparison plot (daily)
+```{r}
+temp1 <- airly1pm10 %>%
+  group_by(day, sensor_id) %>%
+  summarise(dailyPM10 = mean(pm10, na.rm = T)) %>%
+  na.omit()
+
+temp2 <- rbind(regular1 %>%
+  group_by(day) %>%
+  summarise(dailyPM10 = mean(PM10, na.rm = T)), regular2 %>%
+  group_by(day) %>%
+  summarise(dailyPM10 = mean(PM10, na.rm = T)))
+temp2$sensor_id <- 'FRM'
+
+pm10d_sensortosensor <- ggplot(data = temp1, aes(x=day, y=dailyPM10)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = temp2, aes(x=day, y=dailyPM10, lty="FRM/FEM"), color="black") +
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Before Correction')
+#ggsave("pm10d_sensortosensor.png")
+```
+
+```{r}
+temp1 <- airly1pm10 %>%
+  group_by(dayhour, sensor_id) %>%
+  summarise(hourlyPM10 = mean(pm10, na.rm = T)) %>%
+  na.omit()
+
+temp2 <- rbind(regular1 %>%
+  group_by(dayhour) %>%
+  summarise(hourlyPM10 = mean(PM10, na.rm = T)), regular2 %>%
+  group_by(dayhour) %>%
+  summarise(hourlyPM10 = mean(PM10, na.rm = T)))
+temp2$sensor_id <- 'FRM'
+
+pm10h_sensortosensor <- ggplot(data = temp1 , aes(x=dayhour, y=hourlyPM10)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = temp2, aes(x=dayhour, y=hourlyPM10, lty="FRM/FEM"), color="black") +
+  xlab("Hour") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Before Correction')
+#ggsave("pm10h_sensortosensor.png")
+```
+
+to observe diurnal pattern
+```{r}
+temp1 <- airly1pm10 %>%
+  group_by(hour, sensor_id) %>%
+  summarise(hourlyPM10 = mean(pm10, na.rm = T)) %>%
+  na.omit()
+
+temp2 <- rbind(regular1, regular2) %>%
+  group_by(hour) %>%
+  summarise(hourlyPM10 = mean(PM10, na.rm = T))
+temp2$sensor_id <- 'FRM'
+
+pm10h_pattern <- ggplot(data = temp1 , aes(x=hour, y=hourlyPM10)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = temp2, aes(x=hour, y=hourlyPM10, lty="FRM/FEM"), color="black")  +
+  ggtitle(expression(paste("P", M[10])))+
+  xlab("Hour") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]")))
+```
+
+
+regulatory data daily
+```{r}
+regular_pm10a <- regular1 %>%
+  group_by(day) %>%
+  summarise(rdailyPM10 = mean(PM10, na.rm = T))
+
+regular_pm10b <- regular2 %>%
+  group_by(day) %>%
+  summarise(rdailyPM10 = mean(PM10, na.rm = T))
+
+temp2 <- rbind(regular_pm10a, regular_pm10b)
+```
+
+regulatory data hourly
+```{r}
+temp3 <- rbind(regular1 %>%
+  group_by(dayhour) %>%
+  summarise(rhourlyPM10 = mean(PM10, na.rm = T)), regular2 %>%
+  group_by(dayhour) %>%
+  summarise(rhourlyPM10 = mean(PM10, na.rm = T)))
+```
+
+
+RMSE
+```{r}
+temp1 <- airly1 %>%
+  group_by(day, sensor_id) %>%
+  summarise(dailyPM10 = mean(pm10, na.rm = T))
+
+PM10 <- merge(temp1, temp2, by = "day", all.x = T) %>%
+  mutate(diff_square = (rdailyPM10-dailyPM10)**2) %>%
+  na.omit()
+
+M <- n_distinct(PM10$sensor_id)
+N <- n_distinct(PM10$day)
+
+RMSE <- sqrt(sum(PM10$diff_square)/(M*N-1))
+RMSE/mean(temp2$rdailyPM10, na.rm=T)*100
+
+#Accuracy
+100-abs(mean(airly1$pm10, na.rm = T)-mean(temp2$rdailyPM10, na.rm = T))/mean(temp2$rdailyPM10, na.rm = T)*100
+
+#Inter-sensor Variability
+sensor_avg <- airly1 %>%
+  group_by(sensor_id) %>%
+  summarise(avge = mean(pm10, na.rm = T)) %>%
+  arrange(avge)
+
+(max(sensor_avg$avge)-min(sensor_avg$avge))/mean(sensor_avg$avge, na.rm=T)
+```
+
+'7160' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7160') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7160')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7160dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7160dpm10)
+PM10_7160d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7160dpm10)[1][1]) / coef(model7160dpm10)[2][1])
+```
+
+7160 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7160') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7160')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7160hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7160hpm10)
+PM10_7160h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7160hpm10)[1][1]) / coef(model7160hpm10)[2][1])
+```
+
+
+'7194' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7194') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7194')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7194dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7194dpm10)
+PM10_7194d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7194dpm10)[1][1]) / coef(model7194dpm10)[2][1])
+```
+
+7194 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7194') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7194')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7194hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7194hpm10)
+PM10_7194h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7194hpm10)[1][1]) / coef(model7194hpm10)[2][1])
+```
+
+'7205' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7205') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7205')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7205dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7205dpm10)
+PM10_7205d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7205dpm10)[1][1]) / coef(model7205dpm10)[2][1])
+```
+
+7205 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7205') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7205')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7205hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7205hpm10)
+PM10_7205h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7205hpm10)[1][1]) / coef(model7205hpm10)[2][1])
+```
+
+'7250' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7250') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7250')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7250dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7250dpm10)
+PM10_7250d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7250dpm10)[1][1]) / coef(model7250dpm10)[2][1])
+```
+
+7250 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7250') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7250')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7250hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7250hpm10)
+
+PM10_7250h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7250hpm10)[1][1]) / coef(model7250hpm10)[2][1])
+```
+
+'7276' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7276') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7276')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7276dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7276dpm10)
+PM10_7276d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7276dpm10)[1][1]) / coef(model7276dpm10)[2][1])
+```
+
+7276 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7276') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7276')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7276hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7276hpm10)
+PM10_7276h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7276hpm10)[1][1]) / coef(model7276hpm10)[2][1])
+```
+
+'7284' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7284') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7284')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7284dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7284dpm10)
+PM10_7284d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7284dpm10)[1][1]) / coef(model7284dpm10)[2][1])
+```
+
+7284 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7284') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7284')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7284hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7284hpm10)
+PM10_7284h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7284hpm10)[1][1]) / coef(model7284hpm10)[2][1])
+```
+
+'7304' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7304') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7304')
+ 
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7304dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7304dpm10)
+PM10_7304d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7304dpm10)[1][1]) / coef(model7304dpm10)[2][1])
+```
+
+
+7304 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7304') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7304')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+#cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7304hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7304hpm10)
+PM10_7304h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7304hpm10)[1][1]) / coef(model7304hpm10)[2][1])
+```
+
+'7396' daily
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7396') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="Airly"))+
+  geom_line(aes(y=rdailyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7396')
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7396dpm10 <- lm(adailyPM10 ~ rdailyPM10 + 1, data = PM10_day)
+summary(model7396dpm10)
+PM10_7396d <- PM10_day %>%
+  mutate(corrected_PM10 = (adailyPM10 - coef(model7396dpm10)[1][1]) / coef(model7396dpm10)[2][1])
+```
+
+7396 hourly
+```{r}
+temp1 <- airly1pm10 %>%
+  filter(sensor_id == '7396') %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp3, by = "dayhour") %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=ahourlyPM10, colour="Airly"))+
+  geom_line(aes(y=rhourlyPM10, colour="FRM"))+
+  xlab("Date") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]"))) + ggtitle('Sensor 7396')
+
+PM10_hour <- merge(temp1, temp3, by = "dayhour")
+#cor(PM10_hour$ahourlyPM10, PM10_hour$rhourlyPM10)
+model7396hpm10 <- lm(ahourlyPM10 ~ rhourlyPM10 + 1, data = PM10_hour)
+summary(model7396hpm10)
+PM10_7396h <- PM10_hour %>%
+  mutate(corrected_PM10 = (ahourlyPM10 - coef(model7396hpm10)[1][1]) / coef(model7396hpm10)[2][1])
+```
+
+save hourly regression models to use in another R session
+```{r}
+save(model7160hpm10, model7194hpm10, model7205hpm10, model7250hpm10, model7276hpm10, model7284hpm10, model7304hpm10, model7396hpm10, file = "hourlypm10.RData")
+save(model7160dpm10, model7194dpm10, model7205dpm10, model7250dpm10, model7276dpm10, model7284dpm10, model7304dpm10, model7396dpm10, file = "Dailypm10.RData")
+```
+
+daily time series for corrected data
+```{r}
+PM10_7160d$sensor_id <- '7160'
+PM10_7194d$sensor_id <- '7194'
+PM10_7205d$sensor_id <- '7205'
+PM10_7250d$sensor_id <- '7250' 
+PM10_7276d$sensor_id <- '7276'
+PM10_7284d$sensor_id <- '7284'
+PM10_7304d$sensor_id <- '7304'
+PM10_7396d$sensor_id <- '7396'
+
+correct_vis <- rbind(PM10_7160d, PM10_7194d, PM10_7205d, PM10_7250d, PM10_7276d, PM10_7284d, PM10_7304d, PM10_7396d)%>%
+  select(day, corrected_PM10, sensor_id)
+regularPM10day <- PM10_7160d %>% select(day, rdailyPM10)
+regularPM10day$sensor_id <- 'FRM/FEM'
+
+pm10d_sensortosensor_c <- ggplot(data = correct_vis, aes(x=day, y=corrected_PM10)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = regularPM10day, aes(x=day, y=rdailyPM10, lty="FRM/FEM"), color="black") +
+  xlab("Date") +ylab("") + ggtitle('After Correction')
+#ggsave("pm10d_sensortosensor_c.png")
+```
+
+hourly time series for corrected data
+```{r}
+PM10_7160h$sensor_id <- '7160'
+PM10_7194h$sensor_id <- '7194'
+PM10_7205h$sensor_id <- '7205'
+PM10_7250h$sensor_id <- '7250' 
+PM10_7276h$sensor_id <- '7276'
+PM10_7284h$sensor_id <- '7284'
+PM10_7304h$sensor_id <- '7304'
+PM10_7396h$sensor_id <- '7396'
+
+correct_vis <- rbind(PM10_7160h, PM10_7194h, PM10_7205h, PM10_7250h, PM10_7276h, PM10_7284h, PM10_7304h, PM10_7396h)%>%
+  select(dayhour, corrected_PM10, sensor_id)
+regularPM10h <- PM10_7160h %>% select(dayhour, rhourlyPM10)
+regularPM10h$sensor_id <- 'FRM/FEM'
+
+pm10h_sensortosensor_c <- ggplot(data = correct_vis, aes(x=dayhour, y=corrected_PM10)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = regularPM10h, aes(x=dayhour, y=rhourlyPM10, lty="FRM/FEM"), color="black") +
+  xlab("Hour") + ylab("") + ggtitle('After Correction')
+#ggsave("pm10h_sensortosensor_c.png")
+```
+diurnal pattern after correction
+```{r}
+PM10_7160h$sensor_id <- '7160'
+PM10_7194h$sensor_id <- '7194'
+PM10_7205h$sensor_id <- '7205'
+PM10_7250h$sensor_id <- '7250' 
+PM10_7276h$sensor_id <- '7276'
+PM10_7284h$sensor_id <- '7284'
+PM10_7304h$sensor_id <- '7304'
+PM10_7396h$sensor_id <- '7396'
+
+correct_vis <- rbind(PM10_7160h, PM10_7194h, PM10_7205h, PM10_7250h, PM10_7276h, PM10_7284h, PM10_7304h, PM10_7396h)%>%
+  mutate(hour = hour(strptime(dayhour, format="%Y-%m-%d %H:%M:%S"))) %>%
+  select(hour, corrected_PM10, sensor_id) %>%
+  group_by(hour, sensor_id) %>%
+  summarise(hourlyPM10 = mean(corrected_PM10, na.rm = T)) %>%
+  na.omit()
+
+regularPM10h <- PM10_7160h %>%
+  mutate(hour = hour(strptime(dayhour, format="%Y-%m-%d %H:%M:%S"))) %>%
+  select(hour, rhourlyPM10) %>%
+  group_by(hour) %>%
+  summarise(hourlyPM10 = mean(rhourlyPM10, na.rm = T))
+regularPM10h$sensor_id <- 'FRM/FEM'
+
+pm10h_pattern_c <- ggplot(data = correct_vis, aes(x=hour, y=hourlyPM10)) + geom_line(aes(col=sensor_id)) +
+  geom_line(data = regularPM10h, aes(x=hour, y=hourlyPM10, lty="FRM/FEM"), color="black") +
+  ggtitle(expression(paste("P", M[10]))) +
+  xlab("Hour") +ylab(expression(paste("Hourly P", M[10], " [",mu,"g ",m^-3,"]")))
+```
+
+
+
+regression graphs for 8 sensors
+```{r}
+r1 <- ggplot(model7160dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r2 <- ggplot(model7194dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r3 <- ggplot(model7205dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r4 <- ggplot(model7250dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r5 <- ggplot(model7276dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r6 <- ggplot(model7284dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r7 <- ggplot(model7304dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 49, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 15, label.y = 44, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r8 <- ggplot(model7396dpm10, aes(x = rdailyPM10, y = adailyPM10)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 15, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 20, label.y = 46, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+ggarrange(r1, r2, r3, r4, 
+          labels = c("Airly 7160", "Airly 7194", "Airly 7205", "Airly 7250"), hjust = 0.005,
+          ncol = 2, nrow = 2)
+ggarrange(r5, r6, r7, r8,
+          labels = c("Airly 7276", "Airly 7284", "Airly 7304", "Airly 7396"),  hjust = 0.005,
+          ncol = 2, nrow = 2)
+```
+
+hourly regression graphs for 8 sensors
+```{r}
+r1 <- ggplot(model7160hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r2 <- ggplot(model7194hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r3 <- ggplot(model7205hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r4 <- ggplot(model7250hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r5 <- ggplot(model7276hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r6 <- ggplot(model7284hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r7 <- ggplot(model7304hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+r8 <- ggplot(model7396hpm10, aes(x = rhourlyPM10, y = ahourlyPM10)) + 
+  geom_point(alpha=0.3) + 
+  geom_abline(linetype = "dashed", intercept = 0, slope = 1) +
+  geom_smooth(method = "lm", se=FALSE) +
+  stat_regline_equation(label.x = 0, label.y = 50, aes(label = ..eq.label..)) +
+  stat_regline_equation(label.x = 0, label.y = 45, aes(label = ..adj.rr.label..)) +
+  coord_fixed(xlim = c(0, 50), ylim = c(0, 50))+
+  xlab(expression(paste("FRM/FEM P", M[10], " [",mu,"g ",m^-3,"]"))) +ylab(expression(paste("Daily P", M[10], " [",mu,"g ",m^-3,"]")))
+ggarrange(r1, r2, r3, r4, 
+          labels = c("Airly 7160", "Airly 7194", "Airly 7205", "Airly 7250"), hjust = 0.005,
+          ncol = 2, nrow = 2)
+ggarrange(r5, r6, r7, r8,
+          labels = c("Airly 7276", "Airly 7284", "Airly 7304", "Airly 7396"),  hjust = 0.005,
+          ncol = 2, nrow = 2)
+```
+

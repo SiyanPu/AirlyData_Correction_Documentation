@@ -1,0 +1,222 @@
+---
+title: "pm10_TRH"
+author: "Siyan Pu"
+date: "12/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(ggpubr)
+```
+
+all airly data preprocessing
+```{r}
+airly_pm10b <- read.csv("airly_pm10.csv", check.names = F)
+airly_pm10b <- airly_pm10b %>%
+  gather(sensor_id, pm10, -c('Time')) %>%
+  rename('date' = 'Time')
+airly_pm10b <- airly_pm10b[,c(1,3,2)]
+airly_pm10b$sensor_id <- as.integer(airly_pm10b$sensor_id)
+
+airly_pm10c <- read.csv("airly_pm10_nov.csv", check.names = F)
+airly_pm10c <- airly_pm10c %>%
+  gather(sensor_id, pm10, -c('Time', 'mark')) %>%
+  rename('date' = 'Time')
+airly_pm10c$sensor_id <- as.integer(airly_pm10c$sensor_id) 
+
+airly_pm10c <- airly_pm10c %>%
+  select(-mark)
+airly_pm10c <- airly_pm10c[,c(1,3,2)]
+```
+
+```{r}
+airly1_pm10a <- read.csv("airly1.csv") %>%
+  select(date, pm10, sensor_id)
+airly1 <- rbind(airly1_pm10a, airly_pm10b, airly_pm10c)
+#convert to EST time zone (before daylight saving, 7 hour difference)
+#convert to EST time zone (after daylight saving, 6 hour difference)
+airly1$time <- as.POSIXct(airly1$date, format="%Y-%m-%d %H:%M:%S", tz="CET")
+airly1$time <- lubridate::with_tz(airly1$time, "EST")
+airly1$day <- date(strptime(airly1$time, format="%Y-%m-%d %H:%M:%S"))
+airly1$hour <- hour(strptime(airly1$time, format="%Y-%m-%d %H:%M:%S"))
+airly1$dayhour <- lubridate::ymd_h(format(as.POSIXct(airly1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+airly1$sensor_id <- as.factor(airly1$sensor_id)
+airly1pm10 <- airly1
+```
+
+all regular data preprocessing
+```{r}
+regular1 <- read.csv("regular1.csv")
+regular1$RH <- as.numeric(regular1$RH)
+regular1$day <- date(strptime(regular1$Date, format="%Y-%m-%d"))
+regular1$hour <- hour(strptime(regular1$Time, format="%H:%M"))
+regular1$time <- as.POSIXct(paste(regular1$day, regular1$Time), format="%Y-%m-%d %H:%M")
+regular1$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular1$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+```
+
+```{r}
+regular2 <- rbind(read.csv("regular_min_1020.csv"), read.csv("regular_min_1109.csv"))
+regular2$PM10 <- as.numeric(regular2$PM10)
+regular2$RH <- as.numeric(regular2$RH)
+regular2$day <- date(strptime(regular2$Date, format="%Y-%m-%d"))
+regular2$hour <- hour(strptime(regular2$Time, format="%H:%M"))
+regular2$time <- as.POSIXct(paste(regular2$day, regular2$Time), format="%Y-%m-%d %H:%M")
+regular2$dayhour <- lubridate::ymd_h(format(as.POSIXct(regular2$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+```
+
+```{r}
+temp2 <- rbind(regular1, regular2) %>%
+  group_by(day) %>%
+  summarise(rdailyPM10 = mean(PM10, na.rm = T), rTemp = mean(Temp, na.rm = T), rRH = mean(RH, na.rm = T))
+```
+
+'7160' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7160') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+model1pm10u <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model1pm10u)
+```
+
+'7194' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7194') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model2 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model2)
+```
+
+'7205' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7205') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model3 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model3)
+```
+
+'7250' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7250') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model4 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model4)
+```
+
+'7276' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7276') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model5 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model5)
+```
+
+'7284' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7284') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model6 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model6)
+```
+
+'7304' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7304') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model7 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model7)
+```
+
+'7396' all
+```{r}
+temp1 <- airly1 %>%
+  filter(sensor_id == '7396') %>%
+  group_by(day) %>%
+  summarise(adailyPM10 = mean(pm10, na.rm = T))
+
+merge(temp1, temp2, by = "day") %>%
+  ggplot(aes(day))+
+  geom_line(aes(y=adailyPM10, colour="airly"))+
+  geom_line(aes(y=rdailyPM10, colour="regular"))
+
+PM10_day <- merge(temp1, temp2, by = "day")
+cor(PM10_day$adailyPM10, PM10_day$rdailyPM10)
+model8 <- lm(adailyPM10 ~ rdailyPM10 + rTemp + rRH + 1, data = PM10_day)
+summary(model8)
+```
+
