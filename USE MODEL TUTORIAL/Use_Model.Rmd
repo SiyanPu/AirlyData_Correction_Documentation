@@ -1,0 +1,73 @@
+---
+title: "Use Models to Correct and Visualize"
+author: "Siyan Pu"
+date: '2022-07-07'
+output: html_document
+---
+
+I. Import Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+```
+
+II\. Set up environment
+
+a\. Load models(.RData files)
+
+```{r}
+load("dailypm25.RData")
+load("hourlypm25.RData")
+```
+
+b\. Read low-cost measurement data
+
+Preprocess the data to be corrected to this format:![](images/Screen%20Shot%202022-07-07%20at%201.29.02%20PM.png)
+
+```{r}
+airly <- read.csv("Airly_May.csv")
+
+#Extract time variables
+airly$time <- as.POSIXct(airly$date, format="%Y-%m-%d %H:%M:%S", tz="CET")
+airly$time <- lubridate::with_tz(airly$time, "EST")
+airly$day <- date(strptime(airly$time, format="%Y-%m-%d %H:%M:%S"))
+airly$hour <- hour(strptime(airly$time, format="%Y-%m-%d %H:%M:%S"))
+
+airly$dayhour <- lubridate::ymd_h(format(as.POSIXct(airly$time,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d %H"))
+```
+
+III\. Use Model to Correct and Visualize Data
+
+```{r}
+#Use the coefficients from the model to correct data
+pm25h7160 <- airly %>%
+  filter(id == 7160) %>%
+  group_by(dayhour) %>%
+  summarise(ahourlyPM25 = mean(pm25, na.rm=T)) %>%
+  na.omit(ahourlyPM25) %>%
+  mutate(corrected_PM25 = (ahourlyPM25 - coef(model7160hpm25)[1][1]) / coef(model7160hpm25)[2][1])
+
+#plot the corrected data
+plot_pm25h7160 <- pm25h7160 %>%
+  ggplot(aes(dayhour))+
+  geom_line(aes(y=corrected_PM25, colour="bias-corrected"))+
+  geom_line(aes(y=ahourlyPM25, colour="raw"))+
+  xlab("Date") +ylab(expression(paste("P", M[2.5], " [",mu,"g ",m^-3,"]"))) +
+  ggtitle('Sensor 7160')
+
+#save the plot
+pdf("plot_pm25h7160.pdf")
+plot_pm25h7160
+dev.off()
+
+#save corrected data as csv
+pm25h7160 %>%
+  select(time=dayhour, PM25=corrected_PM25) %>%
+  write.csv("pm25h7160.csv")
+```
