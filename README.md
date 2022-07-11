@@ -3,7 +3,7 @@
 ## CREATE MODEL TUTORIAL: 
 To create bias-correction models using the collocation data for each sensor, use the code and data files in this folder.
 ## USE MODEL TUTORIAL: 
-To use pre-created models to correct raw data, use the code in this folder to get corrected data and create visualizations. 
+To correct raw data with the pre-created models, use the code in this folder to get corrected data and create visualizations. 
 
 First, place the pre-created models (.RData files) into this folder. Bias-correction models based on the two-month collocation at the South Dekalb regulatory monitoring site have been put in the folder. If you want to use bias-correction models created from other collocation data, first create them using the code in the CREATE MODEL TUTORIAL folder and put them here.  
 
