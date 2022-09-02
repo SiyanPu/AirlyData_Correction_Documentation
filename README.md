@@ -1,7 +1,8 @@
 # AirlyData Correction Documentation
 
 ## CREATE MODEL TUTORIAL: 
-To create bias-correction models using the collocation data for each sensor, use the code and data files in this folder as a guide.
+To create bias-correction models using the collocation data for each sensor, use the code and data files in this folder as a guide. The data used in this tutorial is already included in this folder. However, you'll have to incorporate complete Airly and Regulatory data covering the whole co-location period to replicate all the 8 bias-correction models in the USE MODEL TUTORIAL folder.
+
 ## USE MODEL TUTORIAL: 
 To correct raw data with the pre-created models, use the code in this folder to get corrected data and create visualizations. 
 
